@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adquest"
+version = "1.1.0"
+description = "Gamified task management CLI with RPG mechanics"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "entru"}]
+
+[project.scripts]
+adquest = "adquest:main"
+
+[tool.setuptools]
+py-modules = ["adquest"]
