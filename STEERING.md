@@ -48,6 +48,7 @@ adquest is a personal CLI tool that gamifies daily task management with RPG mech
 - Weekly/monthly stats and reports
 - Tags/priority filtering
 - Buff system (streak/rest bonuses)
+- Quest energy cost (auto-drain HP/MP on completion, based on XP value or --cost flag)
 
 ## File Layout
 

@@ -16,6 +16,13 @@ LOGS_DIR = DATA_DIR / "logs"
 
 # --- Format ---
 FORMAT = "ansi"  # global, set by --format flag
+VERBOSE = False  # global, set by --verbose flag
+
+
+def vprint(msg: str) -> None:
+    """Print a message only when verbose mode is active."""
+    if VERBOSE:
+        print(colored(f"  [debug] {msg}", C_DIM))
 
 
 # --- Colors ---
@@ -29,13 +36,15 @@ C_BOLD = "\033[1m"
 C_DIM = "\033[2m"
 
 
-def colored(text, color):
+def colored(text: str, color: str) -> str:
+    """Wrap text in ANSI color codes. Returns plain text in chat format."""
     if FORMAT == "chat":
         return text
     return f"{color}{text}{C_RESET}"
 
 
-def bar(current, maximum, width=20):
+def bar(current: int, maximum: int, width: int = 20) -> str:
+    """Render a progress bar with filled/empty blocks."""
     if FORMAT == "chat":
         return f"{current}/{maximum}"
     filled = int(current / maximum * width) if maximum else 0
@@ -69,14 +78,24 @@ DEFAULT_CONFIG = {
 }
 
 
-def load_config():
+def load_config() -> dict:
+    """Load config from disk, falling back to defaults on error."""
     if CONFIG_FILE.exists():
-        return json.loads(CONFIG_FILE.read_text())
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            print(colored(f"⚠️  Config corrupted ({e}). Using defaults.", C_YELLOW))
+            return DEFAULT_CONFIG
     return DEFAULT_CONFIG
 
 
-def save_config(config):
-    CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+def save_config(config: dict) -> None:
+    """Write config to disk. Exits on failure."""
+    try:
+        CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+    except OSError as e:
+        print(colored(f"❌ Failed to save config: {e}", C_RED))
+        sys.exit(1)
 
 
 # --- State ---
@@ -97,25 +116,58 @@ DEFAULT_STATE = {
 }
 
 
-def ensure_dirs():
+def ensure_dirs() -> None:
+    """Create data and logs directories if they don't exist."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_state():
+def load_state() -> dict:
+    """Load state from disk. Falls back to backup or defaults on corruption."""
     ensure_dirs()
     if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
+        vprint(f"Loading state from {STATE_FILE}")
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except json.JSONDecodeError as e:
+            # Try backup before giving up
+            backup = STATE_FILE.with_suffix(".json.bak")
+            if backup.exists():
+                print(colored(f"⚠️  State corrupted ({e}). Restoring from backup.", C_YELLOW))
+                try:
+                    return json.loads(backup.read_text())
+                except (json.JSONDecodeError, OSError):
+                    pass
+            print(colored(f"❌ State file corrupted and no valid backup. Starting fresh.", C_RED))
+            return DEFAULT_STATE.copy()
+        except OSError as e:
+            print(colored(f"❌ Cannot read state file: {e}", C_RED))
+            sys.exit(1)
     return DEFAULT_STATE.copy()
 
 
-def save_state(state):
+def save_state(state: dict) -> None:
+    """Save state to disk with automatic backup. Exits on failure."""
     ensure_dirs()
-    STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
+    # Backup current state before overwriting
+    if STATE_FILE.exists():
+        try:
+            backup = STATE_FILE.with_suffix(".json.bak")
+            backup.write_text(STATE_FILE.read_text())
+            vprint(f"Backup saved to {backup}")
+        except OSError:
+            pass  # Non-fatal — proceed with save
+    try:
+        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+        vprint(f"State saved to {STATE_FILE}")
+    except OSError as e:
+        print(colored(f"❌ Failed to save state: {e}", C_RED))
+        sys.exit(1)
 
 
 # --- Level-up ---
-def check_levelup(state, config):
+def check_levelup(state: dict, config: dict) -> None:
+    """Check and apply level-ups if XP exceeds threshold."""
     while state["xp_next"] is not None and state["xp"] >= state["xp_next"]:
         state["xp"] -= state["xp_next"]
         state["level"] += 1
@@ -133,15 +185,19 @@ def check_levelup(state, config):
 
 
 # --- ID helpers ---
-def next_quest_id(state):
+def next_quest_id(state: dict) -> str:
+    """Generate the next unique quest ID (checks active + history)."""
     top_ids = [k for k in state["quests"] if "." not in k]
-    if not top_ids:
+    hist_ids = [h["id"] for h in state.get("history", []) if "." not in h["id"]]
+    all_ids = top_ids + hist_ids
+    if not all_ids:
         return "Q1"
-    nums = [int(k[1:]) for k in top_ids]
+    nums = [int(k[1:]) for k in all_ids]
     return f"Q{max(nums) + 1}"
 
 
-def next_sub_id(state, parent_id):
+def next_sub_id(state: dict, parent_id: str) -> str | None:
+    """Generate the next sub-quest ID under a parent (e.g. Q1.3)."""
     parent = state["quests"].get(parent_id)
     if not parent:
         return None
@@ -149,18 +205,26 @@ def next_sub_id(state, parent_id):
 
 
 # --- Commands ---
-def quest_type(quest):
+def quest_type(quest: dict) -> str:
     """Get quest type with backward compat — defaults to 'main'."""
     return quest.get("type", "main")
 
 
-def quest_focus(quest):
+def quest_focus(quest: dict) -> bool:
     """Get quest focus with backward compat — defaults to False."""
     return quest.get("focus", False)
 
 
-def cmd_quest(args):
+def cmd_quest(args: argparse.Namespace) -> None:
+    """Add a new top-level quest."""
     state = load_state()
+    # Input validation
+    if not args.desc or not args.desc.strip():
+        print(colored("❌ Quest description cannot be empty.", C_RED))
+        return
+    if args.xp is not None and args.xp < 0:
+        print(colored("❌ XP must be a positive number.", C_RED))
+        return
     qid = next_quest_id(state)
     xp = args.xp or 10
     qtype = args.type or "main"
@@ -187,9 +251,20 @@ def cmd_quest(args):
     print(f"{type_icon}  Quest {colored(qid, C_CYAN)} added: {args.desc} [{colored(f'+{xp} XP', C_GREEN)}]{prio_str}{tag_str}")
 
 
-def cmd_sub(args):
+def cmd_sub(args: argparse.Namespace) -> None:
+    """Add a sub-quest under an existing parent quest."""
     state = load_state()
     parent_id = args.parent
+    # Input validation
+    if not args.desc or not args.desc.strip():
+        print(colored("❌ Sub-quest description cannot be empty.", C_RED))
+        return
+    if args.xp is not None and args.xp < 0:
+        print(colored("❌ XP must be a positive number.", C_RED))
+        return
+    if not parent_id.startswith("Q") or not parent_id[1:].replace(".", "").isdigit():
+        print(colored(f"❌ Invalid quest ID format: {parent_id}. Expected format: Q1, Q2.1, etc.", C_RED))
+        return
     if parent_id not in state["quests"]:
         print(colored(f"Quest {parent_id} not found", C_RED))
         return
@@ -219,9 +294,13 @@ def cmd_sub(args):
     print(f"📜 Sub-quest {colored(sid, C_CYAN)} added under {parent_id}: {args.desc} [{colored(f'+{xp} XP', C_GREEN)}]")
 
 
-def cmd_focus(args):
+def cmd_focus(args: argparse.Namespace) -> None:
+    """Mark a quest as focused (max 3 active focuses)."""
     state = load_state()
     qid = args.quest_id
+    if not qid.startswith("Q") or not qid[1:].replace(".", "").isdigit():
+        print(colored(f"❌ Invalid quest ID format: {qid}. Expected format: Q1, Q2.1, etc.", C_RED))
+        return
     if qid not in state["quests"]:
         print(colored(f"Quest {qid} not found", C_RED))
         return
@@ -243,9 +322,13 @@ def cmd_focus(args):
     print(f"🔶 {colored(qid, C_CYAN)} is now in focus: {quest['desc']}")
 
 
-def cmd_unfocus(args):
+def cmd_unfocus(args: argparse.Namespace) -> None:
+    """Remove focus from a quest."""
     state = load_state()
     qid = args.quest_id
+    if not qid.startswith("Q") or not qid[1:].replace(".", "").isdigit():
+        print(colored(f"❌ Invalid quest ID format: {qid}. Expected format: Q1, Q2.1, etc.", C_RED))
+        return
     if qid not in state["quests"]:
         print(colored(f"Quest {qid} not found", C_RED))
         return
@@ -258,10 +341,14 @@ def cmd_unfocus(args):
     print(f"⬜ {colored(qid, C_CYAN)} unfocused: {quest['desc']}")
 
 
-def cmd_done(args):
+def cmd_done(args: argparse.Namespace) -> None:
+    """Mark a quest as complete, award XP, and check level-up."""
     state = load_state()
     config = load_config()
     qid = args.quest_id
+    if not qid.startswith("Q") or not qid[1:].replace(".", "").isdigit():
+        print(colored(f"❌ Invalid quest ID format: {qid}. Expected format: Q1, Q2.1, etc.", C_RED))
+        return
     if qid not in state["quests"]:
         print(colored(f"Quest {qid} not found", C_RED))
         return
@@ -282,6 +369,7 @@ def cmd_done(args):
     xp_gained = quest["xp"]
     state["xp"] += xp_gained
     state["last_quest_date"] = date.today().isoformat()
+    vprint(f"Quest {qid}: +{xp_gained} XP, total now {state['xp']}")
     print(f"✅ {colored(qid, C_MAGENTA)} complete! {colored(f'+{xp_gained} XP', C_GREEN)}")
     # Advance chain
     if quest["chain"]:
@@ -289,6 +377,17 @@ def cmd_done(args):
         chain["current"] += 1
         if chain["current"] >= len(chain["quests"]):
             print(f"🔗 Chain \"{quest['chain']}\" complete!")
+    # Auto-complete children when parent is completed directly
+    if quest["children"]:
+        for child_id in quest["children"]:
+            child = state["quests"].get(child_id)
+            if child and child["status"] != "done":
+                child["status"] = "done"
+                child["completed"] = datetime.now().isoformat(timespec="seconds")
+                state["xp"] += child["xp"]
+                xp_gained += child["xp"]
+                child_xp = child["xp"]
+                print(f"  ✅ {colored(child_id, C_CYAN)} auto-completed! {colored(f'+{child_xp} XP', C_GREEN)}")
     # Parent auto-complete
     if quest["parent"]:
         parent = state["quests"][quest["parent"]]
@@ -305,17 +404,18 @@ def cmd_done(args):
     save_state(state)
 
 
-def quest_tags(quest):
+def quest_tags(quest: dict) -> list[str]:
     """Get quest tags with backward compat — defaults to []."""
     return quest.get("tags", [])
 
 
-def quest_priority(quest):
+def quest_priority(quest: dict) -> str:
     """Get quest priority with backward compat — defaults to 'med'."""
     return quest.get("priority", "med")
 
 
-def cmd_quests(args):
+def cmd_quests(args: argparse.Namespace) -> None:
+    """List all active quests, grouped by type."""
     state = load_state()
     top = [(k, v) for k, v in state["quests"].items() if v["parent"] is None and v["status"] == "active"]
     if not top:
@@ -379,7 +479,8 @@ def cmd_quests(args):
     render_quest_tree(side_quests, "Side Quests", "🌙")
 
 
-def cmd_status(args):
+def cmd_status(args: argparse.Namespace) -> None:
+    """Display character status: level, XP, HP, MP, streak."""
     state = load_state()
     streak_emoji = "🔥" * min(state["streak"], 5) if state["streak"] > 0 else "❄️"
     xp_display = f"{state['xp']}/{state['xp_next']}" if state["xp_next"] else f"{state['xp']}/∞"
@@ -408,8 +509,15 @@ def cmd_status(args):
         print()
 
 
-def cmd_drain(args):
+def cmd_drain(args: argparse.Namespace) -> None:
+    """Deduct HP and/or MP with a reason."""
     state = load_state()
+    if args.hp < 0 or args.mp < 0:
+        print(colored("❌ HP and MP drain values must be positive.", C_RED))
+        return
+    if not args.reason or not args.reason.strip():
+        print(colored("❌ Please provide a reason for the drain.", C_RED))
+        return
     state["hp"] = max(0, state["hp"] - args.hp)
     state["mp"] = max(0, state["mp"] - args.mp)
     save_state(state)
@@ -420,7 +528,8 @@ def cmd_drain(args):
         print(colored("  ⚠️  MP critically low! Consider resting.", C_RED))
 
 
-def cmd_rest(args):
+def cmd_rest(args: argparse.Namespace) -> None:
+    """Restore HP/MP using a predefined rest activity."""
     state = load_state()
     config = load_config()
     presets = config["rest_presets"]
@@ -452,7 +561,25 @@ def cmd_rest(args):
     print(f"   HP: {state['hp']}/100 | MP: {state['mp']}/100")
 
 
-def cmd_log(args):
+def cmd_log(args: argparse.Namespace) -> None:
+    """Archive today's completed quests to a log file, or view past logs."""
+    from datetime import timedelta
+
+    # --- View mode: show past logs ---
+    if getattr(args, "yesterday", False):
+        target = (date.today() - timedelta(days=1)).isoformat()
+        _show_log(target)
+        return
+    if getattr(args, "date", None):
+        _show_log(args.date)
+        return
+    if getattr(args, "week", False):
+        for i in range(6, -1, -1):
+            d = (date.today() - timedelta(days=i)).isoformat()
+            _show_log(d, quiet=True)
+        return
+
+    # --- Write mode: archive today's completions ---
     state = load_state()
     today = date.today().isoformat()
     done_today = {k: v for k, v in state["quests"].items()
@@ -466,8 +593,12 @@ def cmd_log(args):
         lines.append(f"# Quest Log — {today}\n\n")
     for qid, q in sorted(done_today.items()):
         lines.append(f"- [x] **{qid}** — {q['desc']} (+{q['xp']} XP)\n")
-    with open(log_file, "a") as f:
-        f.writelines(lines)
+    try:
+        with open(log_file, "a") as f:
+            f.writelines(lines)
+    except OSError as e:
+        print(colored(f"❌ Failed to write log file: {e}", C_RED))
+        return
     # Move to history, keep last 50
     for qid in done_today:
         state["history"].append({"id": qid, **state["quests"].pop(qid)})
@@ -476,9 +607,30 @@ def cmd_log(args):
     print(f"📝 Logged {len(done_today)} quest(s) to {colored(str(log_file), C_DIM)}")
 
 
-def cmd_edit(args):
+def _show_log(target_date: str, quiet: bool = False) -> None:
+    """Display a past log file by date."""
+    log_file = LOGS_DIR / f"log-{target_date}.md"
+    if not log_file.exists():
+        if not quiet:
+            print(colored(f"No log found for {target_date}.", C_DIM))
+        return
+    with open(log_file, "r") as f:
+        content = f.read().strip()
+    print(content)
+    if not quiet:
+        print()
+
+
+def cmd_edit(args: argparse.Namespace) -> None:
+    """Edit an existing quest's description, XP, type, tags, or priority."""
     state = load_state()
     qid = args.quest_id
+    if not qid.startswith("Q") or not qid[1:].replace(".", "").isdigit():
+        print(colored(f"❌ Invalid quest ID format: {qid}. Expected format: Q1, Q2.1, etc.", C_RED))
+        return
+    if args.xp is not None and args.xp < 0:
+        print(colored("❌ XP must be a positive number.", C_RED))
+        return
     if qid not in state["quests"]:
         print(colored(f"Quest {qid} not found", C_RED))
         return
@@ -513,10 +665,14 @@ def cmd_edit(args):
     print(f"✏️  {colored(qid, C_CYAN)} updated: {', '.join(changes)}")
 
 
-def cmd_reopen(args):
+def cmd_reopen(args: argparse.Namespace) -> None:
+    """Reopen a completed quest (reverses XP)."""
     state = load_state()
     config = load_config()
     qid = args.quest_id
+    if not qid.startswith("Q") or not qid[1:].replace(".", "").isdigit():
+        print(colored(f"❌ Invalid quest ID format: {qid}. Expected format: Q1, Q2.1, etc.", C_RED))
+        return
     # Check active quests first
     if qid in state["quests"]:
         quest = state["quests"][qid]
@@ -555,11 +711,21 @@ def cmd_reopen(args):
     print(colored(f"Quest {qid} not found in active quests or history", C_RED))
 
 
-def cmd_chain(args):
+def cmd_chain(args: argparse.Namespace) -> None:
+    """Link quests into a sequential chain."""
     state = load_state()
     name = args.name
     quest_ids = args.quests
+    if not name or not name.strip():
+        print(colored("❌ Chain name cannot be empty.", C_RED))
+        return
+    if len(quest_ids) < 2:
+        print(colored("❌ A chain needs at least 2 quests.", C_RED))
+        return
     for qid in quest_ids:
+        if not qid.startswith("Q") or not qid[1:].replace(".", "").isdigit():
+            print(colored(f"❌ Invalid quest ID format: {qid}. Expected format: Q1, Q2.1, etc.", C_RED))
+            return
         if qid not in state["quests"]:
             print(colored(f"Quest {qid} not found", C_RED))
             return
@@ -571,7 +737,57 @@ def cmd_chain(args):
     print(f"🔗 Chain \"{colored(name, C_YELLOW)}\": {chain_str}")
 
 
-def cmd_idle(args):
+def cmd_drop(args: argparse.Namespace) -> None:
+    """Drop/abandon a quest without awarding XP. Archives with reason."""
+    state = load_state()
+    qid = args.quest_id
+    if not qid.startswith("Q") or not qid[1:].replace(".", "").isdigit():
+        print(colored(f"❌ Invalid quest ID format: {qid}. Expected format: Q1, Q2.1, etc.", C_RED))
+        return
+    if qid not in state["quests"]:
+        print(colored(f"Quest {qid} not found", C_RED))
+        return
+    quest = state["quests"][qid]
+    if quest["status"] == "done":
+        print(colored(f"Quest {qid} is already completed. Use 'reopen' first if you want to drop it.", C_RED))
+        return
+    reason = args.reason or "No reason given"
+    # Drop the quest
+    quest["status"] = "dropped"
+    quest["completed"] = datetime.now().isoformat(timespec="seconds")
+    quest["drop_reason"] = reason
+    # Also drop active children
+    dropped_children = []
+    for cid in quest.get("children", []):
+        child = state["quests"].get(cid)
+        if child and child["status"] == "active":
+            child["status"] = "dropped"
+            child["completed"] = datetime.now().isoformat(timespec="seconds")
+            child["drop_reason"] = reason
+            dropped_children.append(cid)
+    # Remove from chain if applicable
+    if quest.get("chain"):
+        chain_name = quest["chain"]
+        chain = state["chains"].get(chain_name)
+        if chain:
+            chain["quests"] = [q for q in chain["quests"] if q != qid]
+            if not chain["quests"]:
+                del state["chains"][chain_name]
+    # Move to history
+    state["history"].append({"id": qid, **state["quests"].pop(qid)})
+    for cid in dropped_children:
+        state["history"].append({"id": cid, **state["quests"].pop(cid)})
+    state["history"] = state["history"][-50:]
+    save_state(state)
+    print(f"🗑️  {colored(qid, C_RED)} dropped: {quest['desc']}")
+    print(f"   Reason: {reason}")
+    if dropped_children:
+        print(f"   Also dropped: {', '.join(dropped_children)}")
+    print(colored("   No XP awarded. Quest archived.", C_DIM))
+
+
+def cmd_idle(args: argparse.Namespace) -> None:
+    """Show quests that have been idle for N+ days."""
     state = load_state()
     days = args.days or 3
     today = date.today()
@@ -598,7 +814,8 @@ def cmd_idle(args):
     print(colored(f"  {len(idle_quests)} quest(s) growing cold. Move or abandon?", C_DIM))
 
 
-def cmd_today(args):
+def cmd_today(args: argparse.Namespace) -> None:
+    """Show focused quests and quests created today."""
     state = load_state()
     today = date.today().isoformat()
     # Focused quests
@@ -631,7 +848,85 @@ def cmd_today(args):
         print()
 
 
-def auto_log_previous_day(state):
+def cmd_summary(args: argparse.Namespace) -> None:
+    """Show a daily summary: completed, dropped, added, XP earned, focus status."""
+    state = load_state()
+    today = date.today().isoformat()
+    # Completed today (still in quests dict)
+    completed_today = [(k, v) for k, v in state["quests"].items()
+                       if v["status"] == "done" and v.get("completed", "")[:10] == today]
+    # Also check history (already logged)
+    completed_history = [(h["id"], h) for h in state.get("history", [])
+                         if h.get("completed", "")[:10] == today and h.get("status") == "done"]
+    # Dropped today
+    dropped_today = [(h["id"], h) for h in state.get("history", [])
+                     if h.get("completed", "")[:10] == today and h.get("status") == "dropped"]
+    # Created today (active)
+    created_today = [(k, v) for k, v in state["quests"].items()
+                     if v["status"] == "active" and v.get("created", "")[:10] == today]
+    # Focused quests
+    focused = [(k, v) for k, v in state["quests"].items()
+               if v["status"] == "active" and quest_focus(v)]
+    # XP earned today
+    xp_earned = sum(q["xp"] for _, q in completed_today + completed_history)
+    # Remaining active
+    active_count = sum(1 for v in state["quests"].values() if v["status"] == "active")
+
+    if FORMAT == "chat":
+        print(f"📊 Daily Summary — {today}")
+        print(f"XP earned: +{xp_earned} | Active quests: {active_count}")
+        if completed_today or completed_history:
+            print(f"\n✅ Completed ({len(completed_today) + len(completed_history)}):")
+            for qid, q in completed_today + completed_history:
+                print(f"  - {qid} — {q['desc']} (+{q['xp']})")
+        if dropped_today:
+            print(f"\n🗑️ Dropped ({len(dropped_today)}):")
+            for qid, q in dropped_today:
+                reason = q.get("drop_reason", "")
+                print(f"  - {qid} — {q['desc']} ({reason})")
+        if created_today:
+            print(f"\n📋 Added ({len(created_today)}):")
+            for qid, q in created_today:
+                print(f"  - {qid} — {q['desc']} (+{q['xp']})")
+        if focused:
+            print(f"\n🔶 Focus:")
+            for qid, q in focused:
+                print(f"  - {qid} — {q['desc']}")
+        if not (completed_today or completed_history or dropped_today or created_today):
+            print("\nNothing happened today yet. Time to hunt!")
+    else:
+        print()
+        print(colored(f"  📊 Daily Summary — {today}", C_BOLD))
+        print()
+        print(f"  XP earned: {colored(f'+{xp_earned}', C_GREEN)} | Active: {active_count} quest(s)")
+        if completed_today or completed_history:
+            print()
+            print(colored(f"  ✅ Completed ({len(completed_today) + len(completed_history)})", C_GREEN))
+            for qid, q in completed_today + completed_history:
+                print(f"     {colored(qid, C_MAGENTA)} — {q['desc']} ({colored(f'+{q['xp']} XP', C_GREEN)})")
+        if dropped_today:
+            print()
+            print(colored(f"  🗑️  Dropped ({len(dropped_today)})", C_RED))
+            for qid, q in dropped_today:
+                reason = q.get("drop_reason", "")
+                print(f"     {colored(qid, C_DIM)} — {q['desc']} ({reason})")
+        if created_today:
+            print()
+            print(colored(f"  📋 Added ({len(created_today)})", C_CYAN))
+            for qid, q in created_today:
+                print(f"     {colored(qid, C_CYAN)} — {q['desc']} ({colored(f'+{q['xp']} XP', C_GREEN)})")
+        if focused:
+            print()
+            print(colored("  🔶 Focus", C_YELLOW))
+            for qid, q in focused:
+                print(f"     {colored(qid, C_CYAN)} — {q['desc']}")
+        if not (completed_today or completed_history or dropped_today or created_today):
+            print()
+            print(colored("  Nothing happened today yet. Time to hunt!", C_DIM))
+        print()
+
+
+def auto_log_previous_day(state: dict) -> dict:
     """Log completed quests from previous day(s) that haven't been archived yet."""
     today = date.today().isoformat()
     # Find all completed quests that are NOT from today and still in quests dict
@@ -653,8 +948,12 @@ def auto_log_previous_day(state):
             lines.append(f"# Quest Log — {log_date}\n\n")
         for qid, q in sorted(quests.items()):
             lines.append(f"- [x] **{qid}** — {q['desc']} (+{q['xp']} XP)\n")
-        with open(log_file, "a") as f:
-            f.writelines(lines)
+        try:
+            with open(log_file, "a") as f:
+                f.writelines(lines)
+        except OSError as e:
+            print(colored(f"⚠️  Failed to write log for {log_date}: {e}", C_YELLOW))
+            continue
         # Move to history
         for qid in quests:
             state["history"].append({"id": qid, **state["quests"].pop(qid)})
@@ -666,7 +965,8 @@ def auto_log_previous_day(state):
     return state
 
 
-def cmd_newday(args):
+def cmd_newday(args: argparse.Namespace) -> None:
+    """Start a new day: archive previous, update streak, reset HP/MP."""
     state = load_state()
     # Auto-log previous day's completed quests before resetting
     state = auto_log_previous_day(state)
@@ -698,10 +998,12 @@ def cmd_newday(args):
 
 
 # --- CLI ---
-def main():
-    global FORMAT
+def main() -> None:
+    """CLI entry point — parse arguments and dispatch to command handlers."""
+    global FORMAT, VERBOSE
     parser = argparse.ArgumentParser(prog="adquest", description="⚔️ Gamified task management RPG")
     parser.add_argument("--format", choices=["ansi", "chat"], default="ansi", help="Output format")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Show debug output")
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("quest", help="Add a new quest")
@@ -732,7 +1034,10 @@ def main():
     p = sub.add_parser("rest", help="Restore HP/MP")
     p.add_argument("activity", help="Rest activity")
 
-    sub.add_parser("log", help="Archive completed quests")
+    p = sub.add_parser("log", help="Archive completed quests")
+    p.add_argument("--date", help="Show log for a specific date (YYYY-MM-DD)")
+    p.add_argument("--yesterday", action="store_true", help="Show yesterday's log")
+    p.add_argument("--week", action="store_true", help="Show last 7 days of logs")
 
     p = sub.add_parser("chain", help="Link quests sequentially")
     p.add_argument("name", help="Chain name")
@@ -762,8 +1067,15 @@ def main():
 
     sub.add_parser("today", help="Show focused quests + created today")
 
+    p = sub.add_parser("drop", help="Drop/abandon a quest (no XP)")
+    p.add_argument("quest_id", help="Quest ID to drop")
+    p.add_argument("reason", nargs="?", default=None, help="Reason for dropping")
+
+    sub.add_parser("summary", help="Show daily summary")
+
     args = parser.parse_args()
     FORMAT = args.format
+    VERBOSE = args.verbose
     if not args.command:
         parser.print_help()
         return
@@ -785,7 +1097,16 @@ def main():
         case "unfocus": cmd_unfocus(args)
         case "idle": cmd_idle(args)
         case "today": cmd_today(args)
+        case "drop": cmd_drop(args)
+        case "summary": cmd_summary(args)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+        sys.exit(0)
+    except Exception as e:
+        print(f"\033[31m❌ Unexpected error: {e}\033[0m", file=sys.stderr)
+        sys.exit(1)
