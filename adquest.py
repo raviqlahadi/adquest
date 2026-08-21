@@ -391,7 +391,8 @@ def cmd_done(args: argparse.Namespace) -> None:
     # Parent auto-complete
     if quest["parent"]:
         parent = state["quests"][quest["parent"]]
-        if all(state["quests"][c]["status"] == "done" for c in parent["children"]):
+        # Missing children were archived (already done) — treat as complete
+        if all(state["quests"].get(c, {"status": "done"})["status"] == "done" for c in parent["children"]):
             parent["status"] = "done"
             parent["completed"] = datetime.now().isoformat(timespec="seconds")
             bonus = 5
