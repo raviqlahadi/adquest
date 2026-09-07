@@ -7,6 +7,7 @@ backend to BACKENDS; any contract failure there means a parity break.
 
 import argparse
 import json
+import os
 import tempfile
 from copy import deepcopy
 from pathlib import Path
@@ -19,10 +20,22 @@ import adquest.store as store_mod
 from adquest.store import DEFAULT_STATE
 from adquest.store.file import FileStore
 
+try:
+    import psycopg
+    from adquest.store.postgres import PostgresStore
+    _HAS_POSTGRES = True
+except ImportError:  # psycopg is an optional extra — file backend runs without it
+    _HAS_POSTGRES = False
+
+# Local dev cluster (~/pgdata/adquest-dev, user-space PG on sdo) —
+# override with ADQUEST_TEST_DSN elsewhere.
+TEST_DSN = "host=/tmp port=5433 dbname=adquest_test"
+
 BACKENDS = {
     "file": FileStore,
-    # "postgres": PostgresStore,  # ← added in Q197.2
 }
+if _HAS_POSTGRES:
+    BACKENDS["postgres"] = PostgresStore
 
 
 @pytest.fixture(params=sorted(BACKENDS), ids=sorted(BACKENDS))
@@ -42,9 +55,22 @@ def backend(request, monkeypatch):
     monkeypatch.setattr(paths, "LOGS_DIR", data_dir / "logs")
     # Force the backend under test through the factory seam
     monkeypatch.setattr(store_mod, "open_store", BACKENDS[request.param])
-    # Seed a clean state file
-    data_dir.mkdir(parents=True, exist_ok=True)
-    (data_dir / "state.json").write_text(json.dumps(DEFAULT_STATE, indent=2))
+    if request.param == "postgres":
+        dsn = os.environ.get("ADQUEST_TEST_DSN", TEST_DSN)
+        monkeypatch.setenv("ADQUEST_DSN", dsn)
+        # PostgresStore bootstraps schema + default seed itself; the
+        # fixture only guarantees a clean slate. DROP+CREATE also resets
+        # identity sequences (a TRUNCATE would need RESTART IDENTITY).
+        try:
+            with psycopg.connect(dsn, autocommit=True) as conn:
+                conn.execute("DROP SCHEMA public CASCADE")
+                conn.execute("CREATE SCHEMA public")
+        except psycopg.OperationalError as e:
+            pytest.skip(f"Postgres dev cluster unreachable at {dsn}: {e}")
+    else:
+        # Seed a clean state file
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "state.json").write_text(json.dumps(DEFAULT_STATE, indent=2))
     return request.param
 
 
