@@ -4,15 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adquest"
-version = "1.1.0"
+version = "1.2.0"
 description = "Gamified task management CLI with RPG mechanics"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "entru"}]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+postgres = ["psycopg[binary]>=3.1"]
+
 [project.scripts]
-adquest = "adquest:main"
+adquest = "adquest.cli:main"
 
 [tool.setuptools]
-py-modules = ["adquest"]
+packages = ["adquest", "adquest.core", "adquest.render", "adquest.commands"]
