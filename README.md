@@ -20,7 +20,11 @@ pip install git+https://github.com/youruser/adquest.git
 
 This creates the `adquest` command in your PATH automatically. Works on Linux, macOS, and Windows.
 
-Requires Python 3.10+. Zero external dependencies.
+Requires Python 3.10+. The core has **zero external dependencies** — the optional PostgreSQL backend installs as an extra:
+
+```bash
+pip install 'adquest[postgres]'   # or: uv sync --extra postgres
+```
 
 ## Usage
 
@@ -178,15 +182,50 @@ adquest edit Q1 --tag new,tags # replaces tags
 
 ## Data
 
-All state lives in `~/.adquest/`:
+Default state lives in `~/.adquest/`:
 
 ```
 ~/.adquest/
-├── state.json    # Character + quests
-├── config.json   # Level table + rest presets
+├── state.json    # Character + quests (file backend)
+├── config.json   # Level table + rest presets + backend selection
 └── logs/
     └── log-2026-06-24.md
 ```
+
+## Storage Backends
+
+Two interchangeable backends, one contract — every command behaves identically on both (enforced by the parity test suite):
+
+| Backend | State location | Concurrency | History cap |
+|---------|---------------|-------------|-------------|
+| `file` (default) | `~/.adquest/state.json` | flock (single machine) | 50 entries |
+| `postgres` | PostgreSQL database | session advisory lock (multi-device) | unlimited |
+
+**Selection precedence** (highest wins):
+
+```bash
+adquest --backend postgres --dsn "postgresql://user:pass@host:5432/adquest" status  # 1. CLI flags
+export ADQUEST_BACKEND=postgres ADQUEST_DSN="postgresql://..."                      # 2. env vars
+```
+```jsonc
+// 3. ~/.adquest/config.json
+{ "backend": "postgres", "postgres_dsn": "postgresql://..." }
+```
+
+psycopg imports lazily — the file backend never needs it.
+
+**Migrating from the file backend** (`~/tools/adquest-migrate`, verification built in):
+
+```bash
+# Dry run, then full migration with parity check
+~/tools/adquest-migrate --dry-run
+~/tools/adquest-migrate --reset
+
+# Resurrect quests evicted by v1's 50-entry history cap from git snapshots
+~/tools/adquest-migrate --backfill-git --reset
+```
+
+**Multi-device setup**: run Postgres on a private host (bound to localhost, reached via SSH tunnel — see `postgres-backend-setup.md` in the knowledge vault), point each device's `config.json` at the tunnel, and every machine shares one live saga.
 
 ## Design Principles
 
@@ -194,7 +233,8 @@ All state lives in `~/.adquest/`:
 - **Micro-steps** — any quest >30min should be split into sub-quests
 - **Energy awareness** — HP/MP tracking prevents burnout before it hits
 - **ADHD-friendly** — focus limiter, idle nudges, type separation, visual feedback
-- **Offline-first** — no network, no accounts, just local files
+- **Offline-first** — the default file backend needs no network and no accounts; the optional Postgres backend is self-hosted
+- **Recoverable** — git-synced state, daily DB dumps, and migration tooling that verifies parity on every run
 - **AI-optional** — daily tracking works without an AI assistant
 
 ## License

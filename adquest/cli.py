@@ -2,6 +2,7 @@
 import argparse
 
 import adquest.render as render
+import adquest.store as store_mod
 from . import __version__
 from .commands.quests import (
     cmd_chain,
@@ -26,6 +27,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--format", choices=["ansi", "chat"], default="ansi", help="Output format")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show debug output")
     parser.add_argument("--version", action="version", version=f"adquest {__version__}")
+    parser.add_argument("--backend", choices=["file", "postgres"], default=None,
+                        help="Storage backend override (default: env/config, else file)")
+    parser.add_argument("--dsn", default=None,
+                        help="PostgreSQL DSN override (postgres backend)")
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("quest", help="Add a new quest")
@@ -127,6 +132,7 @@ def main() -> None:
     args = parser.parse_args()
     render.FORMAT = args.format
     render.VERBOSE = args.verbose
+    store_mod.set_cli_overrides(args.backend, args.dsn)
     if not args.command:
         parser.print_help()
         return

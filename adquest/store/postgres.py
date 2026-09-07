@@ -115,8 +115,8 @@ class PostgresStore(QuestStore):
         self._dsn = dsn or os.environ.get(_DSN_ENV)
         if not self._dsn:
             raise QuestError(colored(
-                f"⚠️  No PostgreSQL DSN configured. Pass one directly or set "
-                f"{_DSN_ENV} (e.g. host=/tmp port=5433 dbname=adquest_test).", C_RED
+                f"⚠️  No PostgreSQL DSN configured. Use --dsn, set {_DSN_ENV}, "
+                f"or add postgres_dsn to config.json.", C_RED
             ))
         try:
             self._conn = psycopg.connect(self._dsn)

@@ -8,6 +8,7 @@ backend to BACKENDS; any contract failure there means a parity break.
 import argparse
 import json
 import os
+import re
 import tempfile
 from copy import deepcopy
 from pathlib import Path
@@ -57,6 +58,13 @@ def backend(request, monkeypatch):
     monkeypatch.setattr(store_mod, "open_store", BACKENDS[request.param])
     if request.param == "postgres":
         dsn = os.environ.get("ADQUEST_TEST_DSN", TEST_DSN)
+        # Safety rail (Q197.5 lesson): this fixture DROPS the schema. It
+        # must never point at a database holding real data.
+        m = re.search(r"dbname=([^ ]+)", dsn)
+        dbname = m.group(1) if m else ""
+        if not dbname.endswith("_test"):
+            pytest.fail(f"parity suite refuses non-test database {dbname!r} — "
+                        "dbname must end with '_test'")
         monkeypatch.setenv("ADQUEST_DSN", dsn)
         # PostgresStore bootstraps schema + default seed itself; the
         # fixture only guarantees a clean slate. DROP+CREATE also resets
