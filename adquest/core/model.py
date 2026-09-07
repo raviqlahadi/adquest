@@ -2,20 +2,18 @@
 from ..errors import QuestError
 
 
-def next_quest_id(state: dict) -> str:
-    """Generate the next unique quest ID (checks active + history)."""
-    top_ids = [k for k in state["quests"] if "." not in k]
-    hist_ids = [h["id"] for h in state.get("history", []) if "." not in h["id"]]
-    all_ids = top_ids + hist_ids
+def next_quest_id(store) -> str:
+    """Generate the next unique quest ID (checks active pool + history)."""
+    all_ids = store.all_quest_ids()
     if not all_ids:
         return "Q1"
-    nums = [int(k[1:]) for k in all_ids]
+    nums = [int(qid[1:]) for qid in all_ids if "." not in qid]
     return f"Q{max(nums) + 1}"
 
 
-def next_sub_id(state: dict, parent_id: str) -> str | None:
+def next_sub_id(store, parent_id: str) -> str | None:
     """Generate the next sub-quest ID under a parent (e.g. Q1.3)."""
-    parent = state["quests"].get(parent_id)
+    parent = store.get_quest(parent_id)
     if not parent:
         return None
     return f"{parent_id}.{len(parent['children']) + 1}"

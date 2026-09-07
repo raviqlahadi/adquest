@@ -5,7 +5,7 @@ from ..core.model import quest_focus, quest_priority, quest_tags
 
 
 class ChatRenderer(Renderer):
-    def quest_tree(self, main_quests: list, side_quests: list, state: dict) -> None:
+    def quest_tree(self, main_quests: list, side_quests: list, quests_by_id: dict) -> None:
         sections = (
             (main_quests, "Main Quests", "⚔️"),
             (side_quests, "Side Quests", "🌙"),
@@ -24,7 +24,7 @@ class ChatRenderer(Renderer):
                 prio_str = " 🔴" if prio == "high" else (" 🟡" if prio == "low" else "")
                 print(f"{icon} {qid} — {q['desc']} (+{q['xp']}){prio_str}{focus_tag}{chain_tag}{tag_str}")
                 for cid in q["children"]:
-                    child = state["quests"].get(cid)
+                    child = quests_by_id.get(cid)
                     if child:
                         ci = "✅" if child["status"] == "done" else "⬜"
                         print(f"  {ci} {cid} — {child['desc']} (+{child['xp']})")

@@ -7,7 +7,7 @@ from ..core.model import quest_focus, quest_priority, quest_tags
 
 
 class AnsiRenderer(Renderer):
-    def quest_tree(self, main_quests: list, side_quests: list, state: dict) -> None:
+    def quest_tree(self, main_quests: list, side_quests: list, quests_by_id: dict) -> None:
         sections = (
             (main_quests, "Main Quests", "⚔️"),
             (side_quests, "Side Quests", "🌙"),
@@ -28,7 +28,7 @@ class AnsiRenderer(Renderer):
                 qxp = q["xp"]
                 print(f"  {icon} {colored(qid, C_CYAN)} — {q['desc']} ({colored(f'+{qxp} XP', C_GREEN)}){prio_str}{focus_tag}{chain_tag}{tag_str}")
                 for cid in q["children"]:
-                    child = state["quests"].get(cid)
+                    child = quests_by_id.get(cid)
                     if child:
                         ci = "✅" if child["status"] == "done" else "⬜"
                         cxp = child["xp"]

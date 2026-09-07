@@ -19,4 +19,4 @@ postgres = ["psycopg[binary]>=3.1"]
 adquest = "adquest.cli:main"
 
 [tool.setuptools]
-packages = ["adquest", "adquest.core", "adquest.render", "adquest.commands"]
+packages = ["adquest", "adquest.core", "adquest.render", "adquest.commands", "adquest.store"]
