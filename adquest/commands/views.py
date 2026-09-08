@@ -2,7 +2,7 @@
 from datetime import date
 
 from ..core.model import quest_focus, quest_priority, quest_type
-from ..render import colored, get_renderer, C_CYAN, C_DIM, C_GREEN, C_YELLOW
+from ..render import colored, get_renderer, C_CYAN, C_DIM, C_GREEN, C_YELLOW, C_RED
 from .. import store as store_mod
 
 
