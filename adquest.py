@@ -600,10 +600,9 @@ def cmd_log(args: argparse.Namespace) -> None:
     except OSError as e:
         print(colored(f"❌ Failed to write log file: {e}", C_RED))
         return
-    # Move to history, keep last 50
+    # Move to history — uncapped, full history is kept
     for qid in done_today:
         state["history"].append({"id": qid, **state["quests"].pop(qid)})
-    state["history"] = state["history"][-50:]
     save_state(state)
     print(f"📝 Logged {len(done_today)} quest(s) to {colored(str(log_file), C_DIM)}")
 
@@ -778,7 +777,6 @@ def cmd_drop(args: argparse.Namespace) -> None:
     state["history"].append({"id": qid, **state["quests"].pop(qid)})
     for cid in dropped_children:
         state["history"].append({"id": cid, **state["quests"].pop(cid)})
-    state["history"] = state["history"][-50:]
     save_state(state)
     print(f"🗑️  {colored(qid, C_RED)} dropped: {quest['desc']}")
     print(f"   Reason: {reason}")
@@ -959,7 +957,6 @@ def auto_log_previous_day(state: dict) -> dict:
         for qid in quests:
             state["history"].append({"id": qid, **state["quests"].pop(qid)})
 
-    state["history"] = state["history"][-50:]
     total = sum(len(q) for q in to_log.values())
     dates = ", ".join(sorted(to_log.keys()))
     print(f"📝 Auto-logged {total} quest(s) from {dates}")
